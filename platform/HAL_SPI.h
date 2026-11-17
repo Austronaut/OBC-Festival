@@ -78,6 +78,11 @@ uint8_t HAL_SPI_ResetCC1101(void);
 void    HAL_SPI_WriteReg(uint8_t addr, uint8_t value);
 uint8_t HAL_SPI_ReadReg(uint8_t addr);
 
+/* Status-register read (0x30-0x3D, e.g. CC1101_MARCSTATE). Status regs
+ * share addresses with command strobes, so the burst bit is set to
+ * select the register instead of firing the strobe. */
+uint8_t HAL_SPI_ReadStatus(uint8_t addr);
+
 /* Burst register access (address byte gets CC1101_WRITE_BURST /
  * CC1101_READ_BURST OR'd in internally) */
 void HAL_SPI_WriteBurstReg(uint8_t addr, const uint8_t *buffer, uint8_t len);

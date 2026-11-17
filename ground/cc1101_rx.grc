@@ -1,0 +1,547 @@
+options:
+  parameters:
+    id: cc1101_rx
+    title: CC1101 433 MHz AX.25 receiver
+    author: ''
+    description: RTL-SDR -> 2-FSK demod -> CC1101/AX.25 packet decoder
+    generate_options: qt_gui
+    output_language: python
+    run: 'True'
+    run_options: prompt
+    catch_exceptions: 'True'
+    window_size: (1000,1000)
+    sizing_mode: fixed
+    placement: (0,0)
+    comment: ''
+  states:
+    coordinate:
+    - 8
+    - 8
+    rotation: 0
+    state: enabled
+blocks:
+- name: rf_freq
+  id: variable
+  parameters:
+    value: 433.92e6
+    comment: CC1101 carrier (FREQ2..0 in cc1101.c)
+  states:
+    coordinate:
+    - 200
+    - 12
+    rotation: 0
+    state: enabled
+- name: offset
+  id: variable
+  parameters:
+    value: 100e3
+    comment: |-
+      Tune this far below the signal to dodge
+      the RTL-SDR DC spike at the centre
+  states:
+    coordinate:
+    - 320
+    - 12
+    rotation: 0
+    state: enabled
+- name: samp_rate
+  id: variable
+  parameters:
+    value: '250275'
+    comment: |-
+      = 25 x 10 x 1001.1 baud -> exactly
+      10 samples/bit after the /25 low-pass
+  states:
+    coordinate:
+    - 440
+    - 12
+    rotation: 0
+    state: enabled
+- name: deviation
+  id: variable
+  parameters:
+    value: 25.4e3
+    comment: CC1101 DEVIATN (2-FSK, +/-25.4 kHz)
+  states:
+    coordinate:
+    - 560
+    - 12
+    rotation: 0
+    state: enabled
+- name: decim
+  id: variable
+  parameters:
+    value: '25'
+    comment: |-
+      Low-pass decimation: 250275 -> 10011 S/s.
+      Only decimate AFTER the FM demod: at 50 kS/s
+      the +/-25.4 kHz deviation would alias
+  states:
+    coordinate:
+    - 680
+    - 12
+    rotation: 0
+    state: enabled
+- name: rf_gain
+  id: variable_qtgui_range
+  parameters:
+    label: RF gain (dB)
+    rangeType: float
+    value: '30'
+    start: '0'
+    stop: '49.6'
+    step: '0.1'
+    widget: counter_slider
+    gui_hint: 0,0,1,1
+    comment: ''
+  states:
+    coordinate:
+    - 800
+    - 12
+    rotation: 0
+    state: enabled
+- name: ppm
+  id: variable_qtgui_range
+  parameters:
+    label: Freq correction (ppm)
+    rangeType: int
+    value: '0'
+    start: '-100'
+    stop: '100'
+    step: '1'
+    widget: counter_slider
+    gui_hint: 0,1,1,1
+    comment: |-
+      Nudge until the bursts sit centred
+      (offset) in the waterfall
+  states:
+    coordinate:
+    - 960
+    - 12
+    rotation: 0
+    state: enabled
+- name: osmosdr_source_0
+  id: osmosdr_source
+  parameters:
+    type: fc32
+    args: '"rtl=0"'
+    sync: none
+    num_mboards: '1'
+    nchan: '1'
+    sample_rate: samp_rate
+    freq0: rf_freq - offset
+    corr0: ppm
+    dc_offset_mode0: '0'
+    iq_balance_mode0: '0'
+    gain_mode0: 'False'
+    gain0: rf_gain
+    if_gain0: '20'
+    bb_gain0: '20'
+    ant0: ''''''
+    bw0: '0'
+    clock_source0: ''''''
+    time_source0: ''''''
+    comment: NESDR SMArt (RTL-SDR)
+  states:
+    coordinate:
+    - 16
+    - 180
+    rotation: 0
+    state: enabled
+- name: freq_xlating_fir_filter_xxx_0
+  id: freq_xlating_fir_filter_xxx
+  parameters:
+    type: ccc
+    decim: '1'
+    taps: firdes.low_pass(1, samp_rate, 40e3, 10e3)
+    center_freq: offset
+    samp_rate: samp_rate
+    comment: |-
+      Shift signal to 0 Hz, keep +/-40 kHz
+      (no decimation here, see decim)
+  states:
+    coordinate:
+    - 320
+    - 196
+    rotation: 0
+    state: enabled
+- name: analog_quadrature_demod_cf_0
+  id: analog_quadrature_demod_cf
+  parameters:
+    gain: samp_rate/(2*math.pi*deviation)
+    comment: 'FM demod: +deviation -> +1, -deviation -> -1'
+  states:
+    coordinate:
+    - 620
+    - 212
+    rotation: 0
+    state: enabled
+- name: low_pass_filter_0
+  id: low_pass_filter
+  parameters:
+    type: fir_filter_fff
+    decim: decim
+    interp: '1'
+    gain: '1'
+    samp_rate: samp_rate
+    cutoff_freq: 1.5e3
+    width: 1e3
+    win: window.WIN_HAMMING
+    beta: '6.76'
+    comment: |-
+      Smooth bits, 250275 -> 10011 S/s
+      (= 10 samples per bit)
+  states:
+    coordinate:
+    - 860
+    - 180
+    rotation: 0
+    state: enabled
+- name: epy_block_0
+  id: epy_block
+  parameters:
+    _source_code: |
+      """
+      CC1101 packet decoder - GNU Radio Embedded Python Block.
+
+      This file is the canonical copy of the "CC1101 Packet Printer" block in
+      cc1101_rx.grc. GRC stores embedded-block code *inside* the .grc file, so
+      after editing this file, re-paste it into the block (double-click it ->
+      "Open in Editor"), or the two copies drift apart.
+
+      Input:  demodulated FSK as a float stream, `sps` samples per bit
+              (positive = '1', negative = '0').
+      Output: none - decoded packets are printed and appended to a log file.
+
+      No clock recovery: instead, one independent decoder runs per sample
+      phase (sps of them), and whichever phase lands near the bit centre
+      decodes cleanly. Duplicates from neighbouring phases are suppressed.
+      """
+
+      import os
+
+      import numpy as np
+      from gnuradio import gr
+
+
+      def crc16(data, c=0xFFFF):
+          # CC1101 CRC-16, poly 0x8005
+          for byte in data:
+              c ^= byte << 8
+              for _ in range(8):
+                  c = ((c << 1) ^ 0x8005) & 0xFFFF if c & 0x8000 else (c << 1) & 0xFFFF
+          return c
+
+
+      def fcs_x25(data):
+          # AX.25 FCS: CRC-16/X-25
+          c = 0xFFFF
+          for byte in data:
+              c ^= byte
+              for _ in range(8):
+                  c = (c >> 1) ^ 0x8408 if c & 1 else c >> 1
+          return c ^ 0xFFFF
+
+
+      def parse_ax25(frame):
+          """Decode an AX.25 frame. Returns str or None."""
+
+          if len(frame) < 17:
+              return None
+
+          body, rx_fcs = frame[:-2], frame[-2] | (frame[-1] << 8)
+          fcs_ok = rx_fcs == fcs_x25(body)
+
+          addrs, i = [], 0
+
+          while True:
+              if i + 7 > len(body):
+                  return None
+
+              a = body[i:i + 7]
+
+              call = ''.join(chr(b >> 1) for b in a[:6]).strip()
+              ssid = (a[6] >> 1) & 0x0F
+
+              addrs.append(call + (f"-{ssid}" if ssid else ""))
+
+              i += 7
+
+              if a[6] & 1 or len(addrs) >= 10:
+                  break
+
+          if len(addrs) < 2 or i >= len(body):
+              return None
+
+          dest, src, digis = addrs[0], addrs[1], addrs[2:]
+
+          ctrl = body[i]
+          i += 1
+
+          pid = None
+
+          if (ctrl & 0x01) == 0 or (ctrl & 0xEF) == 0x03:
+              if i < len(body):
+                  pid = body[i]
+                  i += 1
+
+          info = body[i:]
+
+          path = src + ">" + dest + (
+              "," + ",".join(digis) if digis else ""
+          )
+
+          pid_s = f" pid={pid:02X}" if pid is not None else ""
+
+          return (
+              f"{path} ctrl={ctrl:02X}{pid_s} "
+              f"FCS={'OK' if fcs_ok else 'BAD'} "
+              f"info={info.decode('ascii', errors='replace')!r}"
+          )
+
+
+      def default_log_path():
+          """decoded_packets.txt next to this code, on whatever machine it runs.
+
+          When GRC runs the flowgraph it writes this block out as
+          <flowgraph>_epy_block_0.py beside the .grc file, so __file__ points
+          into the ground/ folder on Linux, macOS or Windows alike. If __file__
+          isn't defined (code exec'd some other way), use the current directory.
+          """
+          here = globals().get('__file__')
+          base = os.path.dirname(os.path.abspath(here)) if here else os.getcwd()
+          return os.path.join(base, 'decoded_packets.txt')
+
+
+      class blk(gr.sync_block):
+          """CC1101 Packet Printer
+
+          sps:       samples per bit of the input stream
+          sync_word: 16-bit CC1101 sync word (SYNC1:SYNC0)
+          log_path:  file to append decoded packets to. Empty = decoded_packets.txt
+                     next to the flowgraph. ~ and $VARS / %VARS% are expanded.
+          """
+
+          def __init__(self, sps=10, sync_word=0xD391, log_path=''):
+
+              gr.sync_block.__init__(
+                  self,
+                  name='CC1101 Packet Printer',
+                  in_sig=[np.float32],
+                  out_sig=None
+              )
+
+              self.sps = int(sps)
+              self.sync = sync_word
+              self.log_path = log_path
+              self.log_file = None
+
+              self.n = 0
+
+              self.st = [
+                  dict(sr=0, hunt=True, buf=[], need=8)
+                  for _ in range(self.sps)
+              ]
+
+              self.count = 0
+
+              self.last = (None, -10**9)
+
+          # The log is opened in start(), not __init__: GRC instantiates the
+          # block while you edit the flowgraph (to read its ports and params),
+          # and opening the file there would log a fake session on every edit.
+          def start(self):
+
+              if self.log_path:
+                  path = os.path.expandvars(os.path.expanduser(self.log_path))
+              else:
+                  path = default_log_path()
+
+              path = os.path.abspath(path)
+              os.makedirs(os.path.dirname(path), exist_ok=True)
+
+              # buffering=1 -> line buffered, so each packet hits the disk
+              # immediately (nothing lost if the flowgraph is killed)
+              self.log_file = open(path, "a", encoding="utf-8", buffering=1)
+              self.log_file.write("\n========== NEW GNU RADIO SESSION ==========\n")
+
+              print(f"[CC1101 decoder] logging packets to {path}")
+
+              return True
+
+          @staticmethod
+          def _bytes(bits):
+
+              return [
+                  int(''.join(map(str, bits[i:i+8])), 2)
+                  for i in range(0, len(bits), 8)
+              ]
+
+          def work(self, input_items, output_items):
+
+              for v in input_items[0]:
+
+                  s = self.st[self.n % self.sps]
+
+                  self.n += 1
+
+                  b = 1 if v > 0 else 0
+
+                  # Search for synchronization word
+                  if s['hunt']:
+
+                      s['sr'] = ((s['sr'] << 1) | b) & 0xFFFF
+
+                      if s['sr'] == self.sync:
+
+                          s['hunt'] = False
+                          s['buf'] = []
+                          s['need'] = 8
+
+                      continue
+
+                  # Collect packet bits
+                  s['buf'].append(b)
+
+                  # Read packet length
+                  if len(s['buf']) == 8:
+
+                      length = self._bytes(s['buf'])[0]
+
+                      if length > 61:
+
+                          s['hunt'] = True
+                          s['sr'] = 0
+
+                          continue
+
+                      s['need'] = 8 + 8 * length + 16
+
+                  # Complete packet received
+                  if len(s['buf']) == s['need']:
+
+                      by = self._bytes(s['buf'])
+
+                      length = by[0]
+
+                      payload = bytes(by[1:1 + length])
+
+                      # CC1101 CRC check
+                      ok = (
+                          ((by[-2] << 8) | by[-1])
+                          == crc16(by[:1 + length])
+                      )
+
+                      s['hunt'] = True
+                      s['sr'] = 0
+
+                      # Save valid packets only (and skip the same packet
+                      # decoded again by a neighbouring sample phase)
+                      if ok and not (
+                          payload == self.last[0]
+                          and self.n - self.last[1] < 50 * self.sps * 8
+                      ):
+
+                          self.count += 1
+
+                          self.last = (payload, self.n)
+
+                          decoded = (
+                              parse_ax25(payload)
+                              or 'not AX.25: ' + repr(payload)
+                          )
+
+                          message = (
+                              f"[pkt {self.count}] "
+                              f"CC1101 CRC=OK | {decoded}"
+                          )
+
+                          print(message)
+
+                          if self.log_file:
+                              self.log_file.write(message + "\n")
+
+              return len(input_items[0])
+
+          # Close file when GNU Radio stops the block
+          def stop(self):
+
+              if self.log_file and not self.log_file.closed:
+
+                  self.log_file.close()
+
+              return True
+    sps: '10'
+    sync_word: '0xD391'
+    log_path: ''''''
+    comment: |-
+      Code = ground/lil_decoder.py (re-paste after editing it).
+      log_path empty -> decoded_packets.txt next to this .grc
+  states:
+    coordinate:
+    - 1120
+    - 212
+    rotation: 0
+    state: enabled
+- name: qtgui_waterfall_sink_x_0
+  id: qtgui_waterfall_sink_x
+  parameters:
+    type: complex
+    name: '"Raw spectrum (signal should be at +100 kHz)"'
+    fftsize: '1024'
+    fc: rf_freq - offset
+    bw: samp_rate
+    nconnections: '1'
+    gui_hint: 1,0,1,2
+    comment: ''
+  states:
+    coordinate:
+    - 320
+    - 340
+    rotation: 0
+    state: enabled
+- name: qtgui_time_sink_x_0
+  id: qtgui_time_sink_x
+  parameters:
+    type: float
+    name: '"Demodulated bits (10 samples/bit)"'
+    size: '1024'
+    srate: samp_rate/decim
+    nconnections: '1'
+    autoscale: 'True'
+    gui_hint: 2,0,1,2
+    comment: ''
+  states:
+    coordinate:
+    - 1120
+    - 340
+    rotation: 0
+    state: enabled
+connections:
+- - osmosdr_source_0
+  - '0'
+  - freq_xlating_fir_filter_xxx_0
+  - '0'
+- - osmosdr_source_0
+  - '0'
+  - qtgui_waterfall_sink_x_0
+  - '0'
+- - freq_xlating_fir_filter_xxx_0
+  - '0'
+  - analog_quadrature_demod_cf_0
+  - '0'
+- - analog_quadrature_demod_cf_0
+  - '0'
+  - low_pass_filter_0
+  - '0'
+- - low_pass_filter_0
+  - '0'
+  - epy_block_0
+  - '0'
+- - low_pass_filter_0
+  - '0'
+  - qtgui_time_sink_x_0
+  - '0'
+metadata:
+  file_format: 1
+  grc_version: 3.10.1.1

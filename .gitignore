@@ -44,3 +44,5 @@ Release/
 .launches/
 .metadata/
 RemoteSystemsTempFiles/
+*.claude/
+*.theia/
