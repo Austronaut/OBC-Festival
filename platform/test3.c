@@ -1,6 +1,6 @@
 #include <driverlib.h>
-#include "hal_clock.h"
-#include "hal_spi.h"
+#include "HAL_clock.h"
+#include "HAL_SPI.h"
 #include "cc1101_regs.h"
 
 /* Results are globals so they can be added to CCS's Expressions view

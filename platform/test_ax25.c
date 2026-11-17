@@ -1,6 +1,6 @@
 #include <driverlib.h>
-#include "hal_clock.h"
-#include "hal_spi.h"
+#include "HAL_clock.h"
+#include "HAL_SPI.h"
 #include "cc1101.h"
 #include "ax25.h"
 #include <string.h>

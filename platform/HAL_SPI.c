@@ -1,4 +1,4 @@
-#include "hal_spi.h"
+#include "HAL_SPI.h"
 #include "cc1101_regs.h"
 
 void HAL_SPI_Init(void)
@@ -51,7 +51,7 @@ void HAL_SPI_CS_Deassert(void)
  * Kept here now so the pattern functions have something to build on
  * without redefining this per-call.
  * ------------------------------------------------------------------- */
-static uint8_t SPI_TransferByte(uint8_t data)
+uint8_t SPI_TransferByte(uint8_t data)
 {
     while (!EUSCI_B_SPI_getInterruptStatus(SPI_EUSCI_BASE, EUSCI_B_SPI_TRANSMIT_INTERRUPT));
     EUSCI_B_SPI_transmitData(SPI_EUSCI_BASE, data);

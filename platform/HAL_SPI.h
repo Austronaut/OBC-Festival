@@ -88,6 +88,6 @@ void HAL_SPI_ReadBurstReg(uint8_t addr, uint8_t *buffer, uint8_t len);
 uint8_t HAL_SPI_Strobe(uint8_t strobe);
 
 /* temp header*/
-static uint8_t SPI_TransferByte(uint8_t data);
+uint8_t SPI_TransferByte(uint8_t data);
 
 #endif /* HAL_SPI_H */
