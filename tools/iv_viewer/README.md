@@ -6,6 +6,9 @@ sweep. Earlier sweeps are shown as pale curves; the selected sweep is blue,
 its received samples are orange, and its final extrapolated segment is dashed.
 Current is displayed in **µA**, with voltage in **V**.
 
+To be used in conjunction with the ground station for comms software, to display
+the payload data sent from the OBC.
+
 ## Setup and run
 
 Requires Python 3.10 or later. From this directory:
@@ -15,9 +18,9 @@ python -m pip install -r requirements.txt
 python app.py --file readings.txt
 ```
 
-The viewer polls the input once per second. It automatically refreshes when
-the file identity, size, or modification time changes. **Force update** rereads
-the file immediately.
+The viewer polls the input once per second. It watches the "readings.txt" file, and
+automatically refreshes when the file identity, size, or modification time changes.
+**Force update** rereads the file immediately.
 
 ## Raw input contract
 
@@ -40,7 +43,8 @@ values and their order.
 
 ## Simulate one ten-sweep transfer
 
-Place the supplied CSV directory beside the Python files:
+Place the supplied CSV directory beside the Python files. These are already in the
+repository, sourced from the Tether team's simulations.
 
 ```text
 iv_viewer/
@@ -65,6 +69,7 @@ For a fresh simulation file:
 ```bash
 python simulator.py --file readings.txt --replace
 ```
+`--replace` will start fresh from the first 10 files, and clean up the readings.txt file.
 
 Use a different location or number of sweeps with `--source-dir` and `--count`.
 The simulator validates all selected CSVs before opening the output, so a bad
