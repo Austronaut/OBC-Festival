@@ -1,0 +1,5 @@
+# PySide6 6.12 + pyqtgraph 0.14 corrupts the heap when many curves are
+# plotted ("free(): invalid pointer" on Force update / exit). 6.11.x works.
+# Revisit when pyqtgraph releases a version that supports PySide6 6.12.
+PySide6>=6.6,<6.12
+pyqtgraph>=0.13,<1
