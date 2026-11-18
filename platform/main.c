@@ -1,46 +1,52 @@
+/**
+ * @file main.c
+ * @brief Synchronous tether demo integrated with the existing OBC HAL.
+ *
+ * Add tether.c/tether.h to platform/ and build both .c files in CCS.
+ * Existing HAL_Clock_Init() and HAL_SPI_Init() still own clock and SPI.
+ */
+
 #include <driverlib.h>
+
 #include "HAL_clock.h"
 #include "HAL_SPI.h"
+#include "tether.h"
 
 #define TEST_BYTE 0xAA
 
 int main(void)
 {
-    WDT_A_hold(WDT_A_BASE);        /* stop watchdog - must be first, or the
-                                     * chip resets itself before anything runs */
+    WDT_A_hold(WDT_A_BASE); // disables the watchdog timer
 
-    HAL_Clock_Init();              /* SMCLK -> ~1 MHz DCO, must precede
-                                     * HAL_SPI_Init (assumes this frequency) */
+    // Initialisation functions. Should happen in this order:
+    /* 1 MHz clocks -> shared eUSCI_B1 SPI -> tether. */
+    HAL_Clock_Init();           // inits 1 MHz clocks.
+    HAL_SPI_Init();             // sets up the SPI and also unlocks GPIO LOCKLPM5.
+    Tether_Init();              // DAC A = 0 V; B = 2 V; motor off. */
 
-    HAL_SPI_Init();                /* eUSCI_B1 SPI + CS/GDO0/GDO2 pins +
-                                     * LOCKLPM5 unlock */
-    GPIO_setAsOutputPin(GPIO_PORT_P1, GPIO_PIN0 | GPIO_PIN1);
-    
     while (1)
     {
-        /* --- SPI / clock / CPOL / CPHA / CS test --- */
-        HAL_SPI_CS_Assert();            /* should pulse P4.4 low */
+        /*
+         * Tether_DemoCycle is a blocking combined test. It:
+         *   - DAC A: repeated 0-4 V sweeps -- that's the voltage sweep
+         *   - DAC B: constant ~2 V -- needed for another component on the payloads side
+         *   - motor: 200 full steps uncoil, pause, 200 coil, pause
+         *
+         * Returns only after a complete forward/backward demo cycle.
+         */
+        // Tether_DemoCycle();
 
-        SPI_TransferByte(TEST_BYTE);    /* each call clocks 8 bits on P5.2,
-                                          * data on P5.0 (MOSI) */
-        SPI_TransferByte(TEST_BYTE);
-        SPI_TransferByte(TEST_BYTE);
-        SPI_TransferByte(TEST_BYTE);
+        Tether_Coil(200U);
+        Tether_Uncoil(200U);
 
-        HAL_SPI_CS_Deassert();          /* P4.4 back high */
-
-        /* --- GDO0 / GDO2 direction test --- */
-        if (GPIO_getInputPinValue(GDO0_PORT, GDO0_PIN))
-            GPIO_setOutputHighOnPin(GPIO_PORT_P1, GPIO_PIN0);
-        else
-            GPIO_setOutputLowOnPin(GPIO_PORT_P1, GPIO_PIN0);
-
-        if (GPIO_getInputPinValue(GDO2_PORT, GDO2_PIN))
-            GPIO_setOutputHighOnPin(GPIO_PORT_P1, GPIO_PIN1);
-        else
-            GPIO_setOutputLowOnPin(GPIO_PORT_P1, GPIO_PIN1);
-
-        __delay_cycles(50000);   /* ~50ms pause - makes the CS pulse easy
-                                   * to find and trigger on with a scope */
+        /* Alternative API calls:
+         *
+         * Tether_SweepVoltageA();  // One blocking DAC A sweep
+         * Tether_Uncoil(200U);     // One nominal motor revolution (200 steps)
+         * Tether_Coil(200U);       // One nominal motor revolution back (200 steps)
+         * Tether_SetVoltageA_mV(1500U); // to manually control the voltages
+         * Tether_SetVoltageB_mV(2000U);
+         * Tether_DisableMotor();   // Releases holding torque
+         */
     }
 }
