@@ -1,6 +1,6 @@
 #include <driverlib.h>
-#include "hal_clock.h"
-#include "hal_spi.h"
+#include "HAL_clock.h"
+#include "HAL_SPI.h"
 
 #define TEST_BYTE 0xAA
 

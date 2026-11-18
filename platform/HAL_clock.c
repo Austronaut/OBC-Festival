@@ -1,5 +1,5 @@
 #include <driverlib.h>
-#include "hal_clock.h"
+#include "HAL_clock.h"
 
 void HAL_Clock_Init(void)
 {

@@ -1,6 +1,6 @@
 #include <driverlib.h>
-#include "hal_clock.h"
-#include "hal_spi.h"
+#include "HAL_clock.h"
+#include "HAL_SPI.h"
 
 /* 0xAA = 0b10101010 - alternating bits, easy to recognize on a scope
  * trace and makes the rising/falling edges of CPOL/CPHA obvious. */
