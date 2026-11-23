@@ -19,13 +19,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from curves import Curve, build_curve
+from curves import AverageCurveResult, Curve, VOLTAGES, build_average_curve, build_curve
 from reader import SweepFileReader
 
 INK = "#293747"
 TEAL = "#50bad1"
 PALE_TEAL = (80, 186, 209, 78)
 ORANGE = "#f2a93b"
+PURPLE = "#7a5af8"
+PALE_OUTLIER = (214, 105, 88, 105)
 BACKGROUND = "#fcfbf9"
 
 
@@ -49,6 +51,7 @@ class MainWindow(QMainWindow):
         self.resize(1080, 760)
         self.reader = SweepFileReader(path)
         self.curves: tuple[Curve, ...] = ()
+        self.average_result = AverageCurveResult(None, (), (), ())
         self.last_source_count = 0
         self.main_items: list[object] = []
         self.detail_items: list[object] = []
@@ -89,9 +92,20 @@ class MainWindow(QMainWindow):
         actions.addWidget(QLabel("Highlight:"))
         self.sweep_picker = QComboBox()
         self.sweep_picker.setMinimumWidth(120)
-        self.sweep_picker.currentIndexChanged.connect(self.render_all)
+        self.sweep_picker.currentIndexChanged.connect(self.selection_changed)
         actions.addWidget(self.sweep_picker)
+        self.follow_latest = QCheckBox("Follow newest")
+        self.follow_latest.setChecked(True)
+        self.follow_latest.toggled.connect(self.follow_latest_changed)
+        actions.addWidget(self.follow_latest)
+        self.average_toggle = QCheckBox("Show average")
+        self.average_toggle.setChecked(True)
+        self.average_toggle.toggled.connect(self.render_all)
+        actions.addWidget(self.average_toggle)
         actions.addStretch(1)
+        reset_view = QPushButton("Reset view")
+        reset_view.clicked.connect(self.reset_view)
+        actions.addWidget(reset_view)
         self.detail_toggle = QCheckBox("Show detail near 0 V")
         self.detail_toggle.toggled.connect(self.set_detail_visible)
         actions.addWidget(self.detail_toggle)
@@ -139,14 +153,28 @@ class MainWindow(QMainWindow):
             self.reader = SweepFileReader(Path(selected))
             self.path_label.setText(str(Path(selected).resolve()))
             self.curves = ()
+            self.average_result = AverageCurveResult(None, (), (), ())
             self.last_source_count = 0
             self.poll(force=True)
 
     def set_detail_visible(self, visible: bool) -> None:
         self.detail_plot.setVisible(visible)
 
+    def selection_changed(self, *_args) -> None:
+        if self.sweep_picker.currentIndex() >= 0:
+            self.follow_latest.blockSignals(True)
+            self.follow_latest.setChecked(False)
+            self.follow_latest.blockSignals(False)
+        self.render_all()
+
+    def follow_latest_changed(self, enabled: bool) -> None:
+        if enabled and self.curves:
+            self._select_latest()
+            self.render_all()
+
     def clear_view(self) -> None:
         self.curves = ()
+        self.average_result = AverageCurveResult(None, (), (), ())
         self._refresh_picker()
         self.render_all()
         self.notice.setText("View cleared · input file left unchanged")
@@ -165,6 +193,7 @@ class MainWindow(QMainWindow):
         try:
             archived = self.reader.archive_and_clear()
             self.curves = ()
+            self.average_result = AverageCurveResult(None, (), (), ())
             self.last_source_count = 0
             self._refresh_picker()
             self.render_all()
@@ -185,15 +214,20 @@ class MainWindow(QMainWindow):
                 return
             self.curves = tuple(build_curve(snapshot) for snapshot in batch.sweeps)
             self.last_source_count = len(self.curves)
-            self._refresh_picker()
+            self.average_result = build_average_curve(self.curves)
+            count = len(self.curves)
+            new_data_arrived = count > previous_count
+            self._refresh_picker(
+                select_latest=new_data_arrived and self.follow_latest.isChecked()
+            )
             self.render_all()
 
-            count = len(self.curves)
             if count > previous_count:
                 received = count - previous_count
-                self.notice.setText(
-                    f"Data received · {received} new sweep{'s' if received != 1 else ''}"
-                )
+                if received == 1:
+                    self.notice.setText(f"Data received · Sweep {count}")
+                else:
+                    self.notice.setText(f"Data received · {received} new sweeps")
             elif force:
                 self.notice.setText("Forced update complete")
             elif count < previous_count:
@@ -203,9 +237,15 @@ class MainWindow(QMainWindow):
             if batch.pending_values:
                 needed = 50 - batch.pending_values
                 pending = f" · {batch.pending_values}/50 values received for next sweep ({needed} needed)"
+            average = ""
+            if count:
+                excluded = len(self.average_result.excluded_indices)
+                average = f" · average uses {count - excluded}/{count} sweeps"
+                if excluded:
+                    average += f" ({excluded} outlier{'s' if excluded != 1 else ''} excluded)"
             self.status.setText(
                 f"{count} complete sweep{'s' if count != 1 else ''} · "
-                f"{batch.source_size:,} bytes{pending}"
+                f"{batch.source_size:,} bytes{average}{pending}"
             )
         except FileNotFoundError:
             self.status.setText("Input file does not exist yet · waiting for data")
@@ -213,17 +253,29 @@ class MainWindow(QMainWindow):
             self.notice.setText("New data could not be loaded · showing last valid curves")
             self.status.setText(str(exc))
 
-    def _refresh_picker(self) -> None:
+    def _refresh_picker(self, select_latest: bool = False) -> None:
         old_selection = self.sweep_picker.currentData()
+        excluded = set(self.average_result.excluded_indices)
         self.sweep_picker.blockSignals(True)
         self.sweep_picker.clear()
         for index in range(len(self.curves)):
-            self.sweep_picker.addItem(f"Sweep {index + 1}", index)
+            suffix = " · excluded from average" if index in excluded else ""
+            self.sweep_picker.addItem(f"Sweep {index + 1}{suffix}", index)
         if self.curves:
-            desired = old_selection if isinstance(old_selection, int) else len(self.curves) - 1
+            if select_latest:
+                desired = len(self.curves) - 1
+            else:
+                desired = old_selection if isinstance(old_selection, int) else len(self.curves) - 1
             desired = min(desired, len(self.curves) - 1)
             self.sweep_picker.setCurrentIndex(desired)
         self.sweep_picker.setEnabled(bool(self.curves))
+        self.sweep_picker.blockSignals(False)
+
+    def _select_latest(self) -> None:
+        if not self.curves:
+            return
+        self.sweep_picker.blockSignals(True)
+        self.sweep_picker.setCurrentIndex(len(self.curves) - 1)
         self.sweep_picker.blockSignals(False)
 
     def _clear_plot_items(self) -> None:
@@ -245,23 +297,56 @@ class MainWindow(QMainWindow):
         if not isinstance(selected, int):
             selected = len(self.curves) - 1
 
+        excluded = set(self.average_result.excluded_indices)
         other_label_used = False
+        outlier_label_used = False
         for index, curve in enumerate(self.curves):
             if index == selected:
                 continue
-            name = "Other sweeps" if not other_label_used else None
-            other_label_used = True
+            if index in excluded:
+                name = "Excluded outlier" if not outlier_label_used else None
+                outlier_label_used = True
+                main_pen = pg.mkPen(
+                    PALE_OUTLIER, width=1.5, style=Qt.PenStyle.DashLine
+                )
+                detail_pen = pg.mkPen(
+                    PALE_OUTLIER, width=1.3, style=Qt.PenStyle.DashLine
+                )
+            else:
+                name = "Other sweeps" if not other_label_used else None
+                other_label_used = True
+                main_pen = pg.mkPen(PALE_TEAL, width=1.4)
+                detail_pen = pg.mkPen(PALE_TEAL, width=1.2)
             main = self.main_plot.plot(
                 curve.voltage, curve.current_ua,
-                pen=pg.mkPen(PALE_TEAL, width=1.4),
+                pen=main_pen,
                 name=name,
             )
             detail = self.detail_plot.plot(
                 curve.voltage, curve.current_ua,
-                pen=pg.mkPen(PALE_TEAL, width=1.2),
+                pen=detail_pen,
             )
             self.main_items.append(main)
             self.detail_items.append(detail)
+
+        average_curve = self.average_result.curve
+        if self.average_toggle.isChecked() and average_curve is not None:
+            included = len(self.average_result.included_indices)
+            average_line = self.main_plot.plot(
+                average_curve.voltage[:-1], average_curve.current_ua[:-1],
+                pen=pg.mkPen(PURPLE, width=3.0),
+                name=f"Average ({included}/{len(self.curves)})",
+            )
+            average_tip = self.main_plot.plot(
+                average_curve.voltage[-2:], average_curve.current_ua[-2:],
+                pen=pg.mkPen(PURPLE, width=3.0, style=Qt.PenStyle.DashLine),
+            )
+            average_detail = self.detail_plot.plot(
+                average_curve.voltage, average_curve.current_ua,
+                pen=pg.mkPen(PURPLE, width=3.0),
+            )
+            self.main_items.extend((average_line, average_tip))
+            self.detail_items.append(average_detail)
 
         curve = self.curves[selected]
         line = self.main_plot.plot(
@@ -299,6 +384,55 @@ class MainWindow(QMainWindow):
             low, high = min(local), max(local)
             margin = max((high - low) * 0.1, 1.0)
             self.detail_plot.setYRange(low - margin, high + margin, padding=0)
+
+    def reset_view(self) -> None:
+        """Restore the full sweep and detail view after zooming or panning."""
+        main_values = [
+            current
+            for curve in self.curves
+            for current in curve.current_ua
+        ]
+        average_curve = self.average_result.curve
+        if self.average_toggle.isChecked() and average_curve is not None:
+            main_values.extend(average_curve.current_ua)
+        self._set_plot_range(
+            self.main_plot, VOLTAGES[0], VOLTAGES[-1], main_values, x_padding=0.02
+        )
+
+        detail_values = [
+            current
+            for curve in self.curves
+            for voltage, current in zip(curve.voltage, curve.current_ua)
+            if -2 <= voltage <= 5
+        ]
+        if self.average_toggle.isChecked() and average_curve is not None:
+            detail_values.extend(
+                current
+                for voltage, current in zip(
+                    average_curve.voltage, average_curve.current_ua
+                )
+                if -2 <= voltage <= 5
+            )
+        self._set_plot_range(
+            self.detail_plot, -2, 5, detail_values, x_padding=0
+        )
+
+    @staticmethod
+    def _set_plot_range(
+        plot: pg.PlotWidget,
+        x_min: float,
+        x_max: float,
+        y_values: list[float],
+        x_padding: float,
+    ) -> None:
+        plot.setXRange(x_min, x_max, padding=x_padding)
+        if not y_values:
+            plot.setYRange(-1, 1, padding=0)
+            return
+        low, high = min(y_values), max(y_values)
+        span = high - low
+        margin = max(span * 0.08, abs(low) * 0.02, abs(high) * 0.02, 0.05)
+        plot.setYRange(low - margin, high + margin, padding=0)
 
 
 def main() -> None:

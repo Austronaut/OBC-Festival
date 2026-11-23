@@ -1,4 +1,4 @@
-"""Append ten CSV-derived sweeps to the raw ground-station text file once."""
+"""Append CSV-derived sweeps to the raw ground-station text file once."""
 
 import argparse
 import csv
@@ -71,7 +71,10 @@ def main() -> None:
     )
     parser.add_argument("--file", type=Path, default=Path("readings.txt"))
     parser.add_argument("--source-dir", type=Path, default=find_default_source())
-    parser.add_argument("--count", type=int, default=10)
+    parser.add_argument(
+        "--count", type=int, default=1,
+        help="number of sequential CSV sweeps to append (default: 1)",
+    )
     parser.add_argument(
         "--start", type=int,
         help="1-based CSV position to start from; default continues after existing sweeps",

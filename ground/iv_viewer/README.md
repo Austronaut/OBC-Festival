@@ -6,8 +6,8 @@ sweep. Earlier sweeps are shown as pale curves; the selected sweep is blue,
 its received samples are orange, and its final extrapolated segment is dashed.
 Current is displayed in **µA**, with voltage in **V**.
 
-To be used in conjunction with the ground station for comms software, to display
-the payload data sent from the OBC.
+The viewer is intended to be used alongside the ground-station communications
+software to display tether payload data received from the OBC.
 
 ## Setup and run
 
@@ -18,9 +18,8 @@ python -m pip install -r requirements.txt
 python app.py --file readings.txt
 ```
 
-The viewer polls the input once per second. It watches the "readings.txt" file, and
-automatically refreshes when the file identity, size, or modification time changes.
-**Force update** rereads the file immediately.
+The viewer polls the input once per second. It automatically refreshes when
+the file identity, size, or modification time changes. **Force update** rereads the file immediately.
 
 ## Raw input contract
 
@@ -41,10 +40,9 @@ With no framing information, a missing or additional integer shifts the
 boundaries of all later sweeps. This viewer assumes the transfer preserves all
 values and their order.
 
-## Simulate one ten-sweep transfer
+## Simulate sweep arrivals
 
-Place the supplied CSV directory beside the Python files. These are already in the
-repository, sourced from the Tether team's simulations.
+Place the supplied CSV directory beside the Python files:
 
 ```text
 iv_viewer/
@@ -60,25 +58,41 @@ Then run:
 python simulator.py --file readings.txt
 ```
 
-The command runs once. It takes the first 10 CSV files in filename order,
-reads `I_endpoint`, retains CSV rows 1, 3, …, 99, scales the values by 10¹⁷,
-and appends 500 raw integers. Running it again appends another 10 sweeps.
+The command runs once. On a fresh file it takes the first CSV in filename
+order, reads `I_endpoint`, retains CSV rows 1, 3, …, 99, scales the values by
+10¹⁷, and appends 50 raw integers. Running it again sees one complete sweep
+already present and takes the second CSV; subsequent runs continue likewise.
+
+To append a batch explicitly:
+
+```bash
+python simulator.py --file readings.txt --count 10
+```
 
 For a fresh simulation file:
 
 ```bash
 python simulator.py --file readings.txt --replace
 ```
-`--replace` will start fresh from the first 10 files, and clean up the readings.txt file.
 
 Use a different location or number of sweeps with `--source-dir` and `--count`.
-The simulator validates all selected CSVs before opening the output, so a bad
-CSV does not result in a partial batch.
+Use `--start 31` to explicitly begin at the 31st CSV. The simulator validates
+all selected CSVs before opening the output, so a bad CSV does not result in a
+partial batch. It also refuses to append when the existing raw file ends with
+an incomplete 50-value sweep.
 
 ## Viewer controls
 
 - **Highlight** selects the sweep drawn strongly and shows its measured points.
   All other loaded sweeps remain visible in pale blue.
+- **Follow newest** automatically highlights each newly completed sweep. Manually
+  selecting an older sweep disables it until it is checked again.
+- **Show average** displays a robust average of the measured sweeps. Whole-sweep
+  outliers are detected against the median curve and remain visible as dashed
+  coral lines, but are excluded from the average. At least four sweeps are
+  required before automatic outlier rejection is enabled.
+- **Reset view** restores the full −30 V to 34 V graph and resets the detail view
+  after zooming or panning.
 - **Clear view** removes curves from the window without changing the input.
   A later append reloads the file; Force update reloads it immediately.
 - **Archive & clear file** moves a nonempty input into an `archive/` directory
@@ -90,8 +104,8 @@ CSV does not result in a partial batch.
 
 - `reader.py`: raw parsing, change detection, fixed groups of 50, and archive
   rotation. Change `parse_raw_currents` if the source text format changes.
-- `curves.py`: fixed voltages, integer scaling, interpolation, and final
-  extrapolation.
+- `curves.py`: fixed voltages, integer scaling, interpolation, final
+  extrapolation, robust outlier detection, and averaging.
 - `app.py`: controls, notifications, sweep selection, and plotting.
 - `simulator.py`: one-shot conversion of CSV curves into raw appended data.
 
