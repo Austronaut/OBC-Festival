@@ -21,7 +21,8 @@
 
 /* PA table and FIFOs (burst access) */
 #define CC1101_PATABLE      0x3E
-#define CC1101_TXFIFO       0x3F
+#define CC1101_TXFIFO       0x3F   /* write access */
+#define CC1101_RXFIFO       0x3F   /* read access: same address, other FIFO */
 
 /* Configuration register used for write/readback testing */
 #define CC1101_SYNC1        0x04   /* reset default 0xD3 */
@@ -32,5 +33,14 @@
 #define CC1101_MARCSTATE    0x35   /* low 5 bits, see values below */
 #define CC1101_MARC_IDLE    0x01
 #define CC1101_MARC_TX      0x13
+#define CC1101_MARC_TXFIFO_UNDERFLOW 0x16
+#define CC1101_MARC_RX      0x0D
+#define CC1101_MARC_RXFIFO_OVERFLOW  0x11
+#define CC1101_TXBYTES      0x3A   /* low 7 bits: bytes in TX FIFO; bit 7: underflow */
+#define CC1101_RXBYTES      0x3B   /* low 7 bits: bytes in RX FIFO; bit 7: overflow */
+
+/* Second status byte appended to each received packet (PKTCTRL1 = 0x04):
+ * bit 7 = CRC OK, bits 6:0 = link quality. */
+#define CC1101_LQI_CRC_OK   0x80
 
 #endif /* CC1101_REGS_H */

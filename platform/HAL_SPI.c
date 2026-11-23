@@ -1,4 +1,5 @@
 #include "HAL_SPI.h"
+#include "HAL_clock.h"
 #include "cc1101_regs.h"
 
 void HAL_SPI_Init(void)
@@ -24,7 +25,7 @@ void HAL_SPI_Init(void)
      * source, divided down to SPI_TARGET_HZ. --- */
     EUSCI_B_SPI_initMasterParam param = {0};
     param.selectClockSource   = EUSCI_B_SPI_CLOCKSOURCE_SMCLK;
-    param.clockSourceFrequency = ASSUMED_SMCLK_HZ;
+    param.clockSourceFrequency = HAL_CLOCK_SMCLK_HZ;
     param.desiredSpiClock      = SPI_TARGET_HZ;
     param.msbFirst             = EUSCI_B_SPI_MSB_FIRST;
     param.clockPhase           = EUSCI_B_SPI_PHASE_DATA_CAPTURED_ONFIRST_CHANGED_ON_NEXT;
@@ -53,9 +54,26 @@ void HAL_SPI_CS_Deassert(void)
  * ------------------------------------------------------------------- */
 uint8_t SPI_TransferByte(uint8_t data)
 {
+    /* Clear any leftover "byte received" flag, so the wait below can only
+     * end on THIS byte. Reading RXBUF clears RXIFG. */
+    if (EUSCI_B_SPI_getInterruptStatus(SPI_EUSCI_BASE, EUSCI_B_SPI_RECEIVE_INTERRUPT))
+    {
+        (void)EUSCI_B_SPI_receiveData(SPI_EUSCI_BASE);
+    }
+
     while (!EUSCI_B_SPI_getInterruptStatus(SPI_EUSCI_BASE, EUSCI_B_SPI_TRANSMIT_INTERRUPT));
     EUSCI_B_SPI_transmitData(SPI_EUSCI_BASE, data);
-    while (EUSCI_B_SPI_isBusy(SPI_EUSCI_BASE));
+
+    /* Wait until the byte has been fully clocked out. In SPI the last bit
+     * is received at the same clock edge the last bit is sent, so RXIFG
+     * means "this byte is completely done".
+     *
+     * Do NOT poll UCBUSY here instead: it is not set immediately after
+     * TXBUF is written. At 8 MHz the CPU could read it as "not busy"
+     * before the transfer had started, return early, and the caller would
+     * raise CS while the last byte was still shifting out, so the CC1101
+     * dropped it (seen as TEST0 reading back 0x0B instead of 0x09). */
+    while (!EUSCI_B_SPI_getInterruptStatus(SPI_EUSCI_BASE, EUSCI_B_SPI_RECEIVE_INTERRUPT));
     return EUSCI_B_SPI_receiveData(SPI_EUSCI_BASE);
 }
 
@@ -64,12 +82,14 @@ uint8_t SPI_TransferByte(uint8_t data)
  * ------------------------------------------------------------------- */
 
 /* Bounded wait so a wiring fault fails visibly instead of hanging.
- * ~20000 polls is tens of ms at 1 MHz, far longer than the CC1101 needs. */
+ * Each poll is a DriverLib call (tens of cycles), so 20000 polls is still
+ * several ms at 8 MHz, far longer than the CC1101's ~150 us oscillator
+ * start-up. */
 #define WAIT_READY_TIMEOUT   20000UL
 #define HAL_SPI_ERR_VALUE    0xFF
 
-/* __delay_cycles needs a compile-time constant; ASSUMED_SMCLK_HZ is one. */
-#define DELAY_US(us)         __delay_cycles((ASSUMED_SMCLK_HZ / 1000000UL) * (us))
+/* Microsecond busy-wait, scaled to the CPU clock (see HAL_clock.h). */
+#define DELAY_US(us)         HAL_DELAY_US(us)
 
 /* MISO is read through the port input register while muxed to the eUSCI.
  * If the handshake times out with the chip correctly wired, suspect this. */
@@ -169,6 +189,11 @@ uint8_t HAL_SPI_Strobe(uint8_t strobe)
  * Day 4: burst access
  * ------------------------------------------------------------------- */
 
+/* DEBUG (SPI corruption hunt): idle time between bytes of a burst write,
+ * in microseconds. 0 = back to back (normal). Try e.g. 20 to see whether
+ * long FIFO writes stop corrupting when the bytes are spaced out. */
+#define HAL_SPI_BURST_GAP_US   0
+
 void HAL_SPI_WriteBurstReg(uint8_t addr, const uint8_t *buffer, uint8_t len)
 {
     uint8_t i;
@@ -179,6 +204,9 @@ void HAL_SPI_WriteBurstReg(uint8_t addr, const uint8_t *buffer, uint8_t len)
         SPI_TransferByte(addr | CC1101_WRITE_BURST);
         for (i = 0; i < len; i++)
         {
+#if HAL_SPI_BURST_GAP_US > 0
+            DELAY_US(HAL_SPI_BURST_GAP_US);
+#endif
             SPI_TransferByte(buffer[i]);
         }
     }

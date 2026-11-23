@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<projectDescription>
+	<name>uplink_msp430</name>
+	<comment></comment>
+	<projects>
+	</projects>
+	<buildSpec>
+		<buildCommand>
+			<name>org.eclipse.cdt.managedbuilder.core.genmakebuilder</name>
+			<arguments>
+			</arguments>
+		</buildCommand>
+	</buildSpec>
+	<natures>
+		<nature>com.ti.ccstudio.core.ccsNature</nature>
+		<nature>org.eclipse.cdt.core.cnature</nature>
+		<nature>org.eclipse.cdt.managedbuilder.core.managedBuildNature</nature>
+		<nature>org.eclipse.cdt.core.ccnature</nature>
+	</natures>
+	<linkedResources>
+		<link>
+			<name>HAL_clock.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/platform/HAL_clock.c</locationURI>
+		</link>
+		<link>
+			<name>HAL_SPI.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/platform/HAL_SPI.c</locationURI>
+		</link>
+		<link>
+			<name>cc1101.c</name>
+			<type>1</type>
+			<locationURI>PARENT-3-PROJECT_LOC/platform/cc1101.c</locationURI>
+		</link>
+		<link>
+			<name>driverlib</name>
+			<type>2</type>
+			<locationURI>PARENT-3-PROJECT_LOC/platform/targetConfigs/MSP430FR5xx_6xx</locationURI>
+		</link>
+	</linkedResources>
+</projectDescription>

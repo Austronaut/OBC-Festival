@@ -2,7 +2,7 @@
  * @file tether.c
  * @brief Synchronous MCP4822 DAC and A4988 stepper demo implementation.
  *
- * Depends on the provided HAL_Clock_Init() (~1 MHz) and HAL_SPI_Init()
+ * Depends on HAL_Clock_Init() (8 MHz, see HAL_clock.h) and HAL_SPI_Init()
  * (eUSCI_B1, ~500 kHz, SPI mode 0, MSB first). Do NOT reconfigure B1 here.
  *
  * Important: P4.4 is CC1101 CS; P3.7 is DAC CS. The two CS lines must
@@ -17,24 +17,27 @@
 #include <msp430.h>
 
 #include "HAL_SPI.h"
+#include "HAL_clock.h"
 
 /* Pin assignments: keep these consistent with the proven tether wiring. */
 #define TETHER_MOTOR_PORT          GPIO_PORT_P3
 #define TETHER_MS_PIN              GPIO_PIN3   /* P3.3 -> MS1/2/3 */
 #define TETHER_STEP_PIN            GPIO_PIN4   /* P3.4 -> STEP */
 #define TETHER_DIR_PIN             GPIO_PIN5   /* P3.5 -> DIR */
-#define TETHER_ENABLE_PIN          GPIO_PIN6   /* P3.6 -> ENABLE, active low */
+#define TETHER_ENABLE_PIN          GPIO_PIN6   /* P3.6 -> ENABLE, active low  DONE */
 #define TETHER_DAC_CS_PIN          GPIO_PIN7   /* P3.7 -> MCP4822 CS */
 #define TETHER_SLEEP_PORT          GPIO_PORT_P7
 #define TETHER_SLEEP_PIN           GPIO_PIN3   /* P7.3 -> SLEEP, active low */
 
-/* MCLK/SMCLK are ~1 MHz in the supplied HAL_clock.h implementation. */
-#define TETHER_MCLK_HZ             1000000UL
-#define TETHER_DAC_STARTUP_CYCLES  100000UL   /* ~100 ms */
-#define TETHER_WAKE_CYCLES         2000UL     /* ~2 ms */
-#define TETHER_STEP_HIGH_CYCLES    10UL       /* ~10 us */
-#define TETHER_STEP_PERIOD_CYCLES  10000UL    /* ~10 ms + pulse/code time */
-#define TETHER_DAC_TICK_CYCLES     1000UL     /* ~1 ms + SPI/code time */
+/* Delays in CPU cycles, derived from the MCLK frequency in HAL_clock.h so
+ * the timing stays the same if the clock changes. __delay_cycles() needs a
+ * compile-time constant, which these are. */
+#define TETHER_US_TO_CYCLES(us)    (HAL_CLOCK_CYCLES_PER_US * (unsigned long)(us))
+#define TETHER_DAC_STARTUP_CYCLES  TETHER_US_TO_CYCLES(100000UL) /* 100 ms */
+#define TETHER_WAKE_CYCLES         TETHER_US_TO_CYCLES(2000UL)   /* 2 ms */
+#define TETHER_STEP_HIGH_CYCLES    TETHER_US_TO_CYCLES(10UL)     /* 10 us */
+#define TETHER_STEP_PERIOD_CYCLES  TETHER_US_TO_CYCLES(10000UL)  /* 10 ms + pulse/code time */
+#define TETHER_DAC_TICK_CYCLES     TETHER_US_TO_CYCLES(1000UL)   /* 1 ms + SPI/code time */
 #define TETHER_PAUSE_TICKS         250U       /* ~250 ms + SPI/code time */
 
 #define TETHER_DAC_MAX_MV          4095U
@@ -44,9 +47,6 @@
 #define TETHER_STEPS_PER_REV       200U
 #define TETHER_TICKS_PER_STEP      10U
 
-#if ASSUMED_SMCLK_HZ != 1000000UL
-#error "Tether delays assume the supplied 1 MHz HAL_Clock configuration"
-#endif
 
 /* Swap the following values if the actual motor wiring reverses meaning. */
 #define TETHER_DIR_UNCOIL_HIGH     1U

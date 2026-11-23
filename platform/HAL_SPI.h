@@ -31,9 +31,8 @@
 #define GDO2_PORT           GPIO_PORT_P3
 #define GDO2_PIN            GPIO_PIN1   /* P3.1 - GDO2, alt. func A13/C13 unused */
 
-/* Assumed SMCLK frequency (Hz) - must match hal_clock.c's DCO setting.
- * Used to compute the eUSCI SPI clock divider at init. */
-#define ASSUMED_SMCLK_HZ    1000000UL
+/* SPI bit rate. The eUSCI divider is computed from HAL_CLOCK_SMCLK_HZ
+ * (HAL_clock.h) at init. 500 kHz suits both the CC1101 and the MCP4822. */
 #define SPI_TARGET_HZ        500000UL
 
 /* CC1101 command strobe / access-mode bits (address byte framing) */

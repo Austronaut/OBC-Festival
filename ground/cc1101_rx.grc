@@ -216,9 +216,16 @@ blocks:
       No clock recovery: instead, one independent decoder runs per sample
       phase (sps of them), and whichever phase lands near the bit centre
       decodes cleanly. Duplicates from neighbouring phases are suppressed.
+
+      Tether sweeps: packets whose AX.25 info starts with 'T' are chunks of a
+      50-point tether I-V sweep (layout in platform/sweep_packet.h). They are
+      reassembled by SweepAssembler, and each complete sweep is appended to
+      iv_viewer/readings.txt for the I-V viewer.
       """
 
       import os
+      import struct
+      import time
 
       import numpy as np
       from gnuradio import gr
@@ -243,8 +250,8 @@ blocks:
           return c ^ 0xFFFF
 
 
-      def parse_ax25(frame):
-          """Decode an AX.25 frame. Returns str or None."""
+      def parse_ax25_fields(frame):
+          """Split an AX.25 frame into its fields. Returns a dict or None."""
 
           if len(frame) < 17:
               return None
@@ -285,19 +292,160 @@ blocks:
                   pid = body[i]
                   i += 1
 
-          info = body[i:]
+          info = bytes(body[i:])
 
           path = src + ">" + dest + (
               "," + ",".join(digis) if digis else ""
           )
 
+          return dict(path=path, ctrl=ctrl, pid=pid, fcs_ok=fcs_ok, info=info)
+
+
+      def format_ax25(fields, info_text=None):
+          """One log line for a parsed frame. info_text replaces the raw info."""
+
+          pid = fields['pid']
           pid_s = f" pid={pid:02X}" if pid is not None else ""
 
+          if info_text is None:
+              info_text = f"info={fields['info'].decode('ascii', errors='replace')!r}"
+
           return (
-              f"{path} ctrl={ctrl:02X}{pid_s} "
-              f"FCS={'OK' if fcs_ok else 'BAD'} "
-              f"info={info.decode('ascii', errors='replace')!r}"
+              f"{fields['path']} ctrl={fields['ctrl']:02X}{pid_s} "
+              f"FCS={'OK' if fields['fcs_ok'] else 'BAD'} {info_text}"
           )
+
+
+      def parse_ax25(frame):
+          """Decode an AX.25 frame. Returns str or None."""
+
+          fields = parse_ax25_fields(frame)
+          return format_ax25(fields) if fields else None
+
+
+      # ---------------------------------------------------------------------------
+      # Tether sweeps. Must match platform/sweep_packet.h:
+      #   'T' | sweep_id u16 | chunk_index u8 | chunk_count u8 | n x int32
+      # all little-endian. Currents are in units of 1e-10 A (uA x 10^4).
+      # ---------------------------------------------------------------------------
+
+      SWEEP_TYPE = 0x54             # 'T'
+      SWEEP_HEADER = struct.Struct('<BHBB')
+      SWEEP_SAMPLES = 50
+      SWEEP_VALUES_PER_CHUNK = 9
+      SWEEP_CHUNKS = 6              # ceil(50 / 9)
+
+      # readings.txt (iv_viewer/reader.py) uses 1e-17 A; the radio sends 1e-10 A.
+      RADIO_TO_READINGS = 10**7
+
+
+      def chunk_value_count(index):
+          """How many currents chunk `index` carries (9, 9, 9, 9, 9, 5)."""
+          return min(SWEEP_VALUES_PER_CHUNK, SWEEP_SAMPLES - index * SWEEP_VALUES_PER_CHUNK)
+
+
+      def parse_sweep_chunk(info):
+          """Unpack one sweep chunk. Returns (sweep_id, index, values) or None."""
+
+          if len(info) < SWEEP_HEADER.size:
+              return None
+
+          kind, sweep_id, index, count = SWEEP_HEADER.unpack_from(info)
+
+          if kind != SWEEP_TYPE or count != SWEEP_CHUNKS or index >= SWEEP_CHUNKS:
+              return None
+
+          n = chunk_value_count(index)
+          if len(info) != SWEEP_HEADER.size + 4 * n:
+              return None
+
+          values = struct.unpack_from(f'<{n}i', info, SWEEP_HEADER.size)
+          return sweep_id, index, values
+
+
+      class SweepAssembler:
+          """Collects the chunks of one sweep and writes it out when complete.
+
+          The viewer groups readings.txt into sweeps purely by counting 50
+          values, so writing a partial sweep would shift every later sweep.
+          Only complete sweeps are written: a lost chunk loses that one sweep.
+
+          Duplicates: only the sweep just written, arriving again within
+          DUPLICATE_WINDOW_S, is treated as a repeat. Any other id is written,
+          including a LOWER one: that is the OBC restarting (its ids begin again
+          at 0), and those sweeps are new data. (An earlier version remembered
+          the last 64 ids and silently dropped every sweep after a restart.)
+          """
+
+          TIMEOUT_S = 30.0          # give up on a sweep that stops arriving
+          DUPLICATE_WINDOW_S = 10.0  # same id again this soon = the same sweep
+
+          def __init__(self, readings_path, clock=time.monotonic):
+              self.readings_path = readings_path
+              self.clock = clock
+              self.sweep_id = None
+              self.chunks = {}
+              self.started = 0.0
+              self.last_written = None       # id of the last sweep written
+              self.last_written_at = 0.0
+              self.dropped = 0
+              self.restarts = 0              # times the sweep ids went backwards
+
+          def add(self, sweep_id, index, values):
+              """Store one chunk. Returns a status string for the log."""
+
+              now = self.clock()
+
+              if (sweep_id == self.last_written
+                      and now - self.last_written_at < self.DUPLICATE_WINDOW_S):
+                  return "duplicate, already written"
+              stale = self.sweep_id is not None and now - self.started > self.TIMEOUT_S
+
+              if sweep_id != self.sweep_id or stale:
+                  if self.chunks:
+                      self.dropped += 1   # previous sweep never completed
+                  self.sweep_id = sweep_id
+                  self.chunks = {}
+                  self.started = now
+
+              self.chunks[index] = values
+
+              if len(self.chunks) < SWEEP_CHUNKS:
+                  return f"{len(self.chunks)}/{SWEEP_CHUNKS} chunks"
+
+              currents = [v for i in range(SWEEP_CHUNKS) for v in self.chunks[i]]
+              self._append(currents)
+
+              note = ""
+              if self.last_written is not None and sweep_id < self.last_written:
+                  self.restarts += 1
+                  note = " (sweep id went back: OBC restarted?)"
+
+              self.last_written = sweep_id
+              self.last_written_at = now
+              self.sweep_id = None
+              self.chunks = {}
+              return f"complete -> {SWEEP_SAMPLES} values written{note}"
+
+          def _append(self, currents):
+              path = self.readings_path
+              os.makedirs(os.path.dirname(path), exist_ok=True)
+
+              # Same separator rule as iv_viewer/simulator.py: never glue a new
+              # value onto an unterminated last line.
+              needs_newline = False
+              if os.path.exists(path) and os.path.getsize(path) > 0:
+                  with open(path, 'rb') as f:
+                      f.seek(-1, os.SEEK_END)
+                      needs_newline = f.read(1) != b'\n'
+
+              # Opened and closed per sweep, so the viewer's "Archive & clear"
+              # can rotate the file between sweeps.
+              with open(path, 'a', encoding='utf-8', newline='\n') as f:
+                  if needs_newline:
+                      f.write('\n')
+                  for value in currents:
+                      f.write(f"{value * RADIO_TO_READINGS}\n")
 
 
       def default_log_path():
@@ -311,6 +459,13 @@ blocks:
           here = globals().get('__file__')
           base = os.path.dirname(os.path.abspath(here)) if here else os.getcwd()
           return os.path.join(base, 'decoded_packets.txt')
+
+
+      def default_readings_path():
+          """iv_viewer/readings.txt beside this code (see default_log_path)."""
+          here = globals().get('__file__')
+          base = os.path.dirname(os.path.abspath(here)) if here else os.getcwd()
+          return os.path.join(base, 'iv_viewer', 'readings.txt')
 
 
       class blk(gr.sync_block):
@@ -346,6 +501,8 @@ blocks:
               self.count = 0
 
               self.last = (None, -10**9)
+
+              self.sweeps = SweepAssembler(default_readings_path())
 
           # The log is opened in start(), not __init__: GRC instantiates the
           # block while you edit the flowgraph (to read its ports and params),
@@ -446,13 +603,10 @@ blocks:
 
                           self.last = (payload, self.n)
 
-                          decoded = (
-                              parse_ax25(payload)
-                              or 'not AX.25: ' + repr(payload)
-                          )
+                          decoded = self._describe(payload)
 
                           message = (
-                              f"[pkt {self.count}] "
+                              f"{time.strftime('%H:%M:%S')} [pkt {self.count}] "
                               f"CC1101 CRC=OK | {decoded}"
                           )
 
@@ -462,6 +616,29 @@ blocks:
                               self.log_file.write(message + "\n")
 
               return len(input_items[0])
+
+          def _describe(self, payload):
+              """Log text for one packet; also feeds tether sweep chunks on."""
+
+              fields = parse_ax25_fields(payload)
+              if not fields:
+                  return 'not AX.25: ' + repr(payload)
+
+              if not fields['fcs_ok']:
+                  # Full hex for debugging: the ASCII repr hides bytes >= 0x80.
+                  return format_ax25(fields) + f" raw={bytes(payload).hex()}"
+
+              chunk = parse_sweep_chunk(fields['info'])
+              if not chunk:
+                  return format_ax25(fields)
+
+              sweep_id, index, values = chunk
+              status = self.sweeps.add(sweep_id, index, values)
+              return format_ax25(
+                  fields,
+                  f"sweep {sweep_id} chunk {index + 1}/{SWEEP_CHUNKS} "
+                  f"({len(values)} values) {status}",
+              )
 
           # Close file when GNU Radio stops the block
           def stop(self):
